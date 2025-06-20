@@ -3,6 +3,7 @@
 [![Лицензия: MIT](https://img.shields.io/badge/Лицензия-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Версия Figma API](https://img.shields.io/badge/Figma%20API-1.0.0-blue.svg)](https://www.figma.com/plugin-docs/api/api-overview/)
 [![Статус проекта](https://img.shields.io/badge/статус-в%20разработке-green.svg)]()
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/A0A01C2TVS)
 
 Превратите ваши дизайны Figma в готовые для печати HTML/CSS шаблоны для **Weasyprint** одним кликом.
 
