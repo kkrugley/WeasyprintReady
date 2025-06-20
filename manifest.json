@@ -1,0 +1,14 @@
+{
+  "name": "WeasyprintReady - Figma to HTML",
+  "id": "1517961269180193520",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "capabilities": [],
+  "enableProposedApi": false,
+  "documentAccess": "dynamic-page",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["https.cdnjs.cloudflare.com"]
+  }
+}

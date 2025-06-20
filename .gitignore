@@ -1,0 +1,16 @@
+# Node
+*.log
+*.log.*
+node_modules
+
+out/
+dist/
+code.js
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Editor-specific files
+.vscode/
+.idea/
