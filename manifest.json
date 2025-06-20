@@ -7,8 +7,12 @@
   "capabilities": [],
   "enableProposedApi": false,
   "documentAccess": "dynamic-page",
-  "editorType": ["figma"],
+  "editorType": [
+    "figma"
+  ],
   "networkAccess": {
-    "allowedDomains": ["https.cdnjs.cloudflare.com"]
+    "allowedDomains": [
+      "https://cdnjs.cloudflare.com"
+    ]
   }
 }
