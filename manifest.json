@@ -12,7 +12,9 @@
   ],
   "networkAccess": {
     "allowedDomains": [
-      "https://cdnjs.cloudflare.com"
+      "https://cdnjs.cloudflare.com",
+      "https://storage.ko-fi.com",
+      "https://ko-fi.com"
     ]
   }
 }
