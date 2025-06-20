@@ -1,101 +1,254 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WeasyPrint Exporter</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 16px; font-size: 13px; }
-    h1 { font-size: 16px; margin: 0 0 12px 0; }
-    p { margin: 0 0 8px 0; }
-    ul { margin: 0 0 12px 20px; padding: 0; }
-    li { margin-bottom: 4px; }
-    button { background-color: #0d99ff; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; width: 100%; font-weight: 600; }
-    button:hover { background-color: #0b7dd1; }
+    :root {
+      --blue: #0d99ff;
+      --blue-hover: #0b7dd1;
+      --gray-light: #f0f0f0;
+      --gray-text: #555;
+      --gray-dark: #222;
+      --border: #e5e5e5;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      font-size: 13px;
+      color: var(--gray-dark);
+    }
+    .container { padding: 16px; }
+    button {
+      background-color: var(--blue);
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      width: 100%;
+      font-weight: 600;
+      font-size: 14px;
+      transition: background-color 0.2s;
+    }
+    button:hover { background-color: var(--blue-hover); }
     button:disabled { background-color: #ccc; cursor: not-allowed; }
-    #status { margin-top: 12px; color: #555; }
-    .warning { background-color: #fffbe6; border: 1px solid #ffe58f; padding: 8px; border-radius: 4px; margin-top: 12px; }
-    code { background: #eee; padding: 2px 4px; border-radius: 3px; }
+    
+    #results { display: none; margin-top: 16px; }
+    .tabs { display: flex; border-bottom: 1px solid var(--border); }
+    .tab {
+      padding: 8px 12px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tab.active { border-bottom-color: var(--blue); font-weight: 600; }
+    .tab-content { display: none; padding: 12px 0; }
+    .tab-content.active { display: block; }
+
+    textarea {
+      width: 100%;
+      height: 200px;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      padding: 8px;
+    }
+    
+    .assets-list { list-style: none; padding: 0; margin: 0; }
+    .assets-list li {
+      background-color: var(--gray-light);
+      padding: 6px 10px;
+      border-radius: 4px;
+      margin-bottom: 6px;
+      font-family: 'Consolas', 'Monaco', monospace;
+    }
+    
+    .accordion-header {
+      background: var(--gray-light);
+      padding: 8px 12px;
+      cursor: pointer;
+      border-radius: 4px;
+      margin-top: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .accordion-header::after { content: '▼'; font-size: 10px; transition: transform 0.2s; }
+    .accordion-header.open::after { transform: rotate(180deg); }
+    .accordion-content {
+      display: none;
+      padding: 12px;
+      border: 1px solid var(--gray-light);
+      border-top: none;
+      border-radius: 0 0 4px 4px;
+    }
+    .accordion-content p { margin: 0 0 10px 0; line-height: 1.5; }
+    .accordion-content strong { color: var(--blue); }
+    code { background: #e0e0e0; padding: 2px 5px; border-radius: 3px; font-family: 'Consolas', 'Monaco', monospace;}
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
-  <h1>WeasyPrint Exporter</h1>
-  <p>Выберите один Frame и нажмите кнопку "Сгенерировать".</p>
-  <p><b>Правила именования слоев:</b></p>
-  <ul>
-    <li>Текст: <code>{{ project_name }}</code>, <code>{{ project_description }}</code></li>
-    <li>Контейнер для картинок: <code>{{#images}}</code></li>
-    <li>Чтобы блок не разрывался на странице: добавьте <code>[no-break]</code> в имя слоя.</li>
-  </ul>
-  <button id="generate">Сгенерировать ZIP-архив</button>
+  <div class="container">
+    <button id="generate">Сгенерировать шаблон</button>
 
-  <div id="status"></div>
+    <div id="accordion">
+      <div class="accordion-header">Как сделать макет "живым"</div>
+      <div class="accordion-content">
+        <p>Чтобы плагин понял, какие части макета нужно сделать динамическими (изменяемыми), просто дайте слоям специальные имена.</p>
+        <hr>
+        <h4>1. Заменяемый текст или картинка</h4>
+        <p>Хотите, чтобы заголовок или аватарка подставлялись автоматически? Используйте префикс <strong>var-</strong>.</p>
+        <p><strong>Пример:</strong><br>
+        Текстовый слой с именем <code>var-user_name</code> превратится в заполнитель, куда будет вставлено имя пользователя.<br>
+        Прямоугольник с картинкой и именем <code>var-user_avatar</code> станет местом для аватара.</p>
+        <hr>
+        <h4>2. Список повторяющихся элементов (карточки, товары)</h4>
+        <p>Если у вас есть, например, список карточек, вам нужно нарисовать <strong>только одну</strong>, а плагин размножит ее сам.</p>
+        <p><strong>Шаг 1:</strong> Создайте Frame, который будет содержать ваш список. Дайте ему имя с префиксом <strong>loop-</strong>. Например, <code>loop-products</code>.
+        <br><strong>Шаг 2:</strong> Внутри этого фрейма нарисуйте <strong>одну</strong> карточку-образец.
+        <br><strong>Шаг 3:</strong> Элементам внутри этой карточки (заголовку, картинке, цене) дайте имена с префиксом <strong>var-</strong>. Например, <code>var-product_name</code>, <code>var-product_image</code>, <code>var-product_price</code>.</p>
+        <p>Плагин поймет, что нужно взять карточку-образец и повторить ее для каждого товара из списка `products`.</p>
+        <hr>
+        <h4>3. Блоки, которые то появляются, то исчезают</h4>
+        <p>Нужно показать кнопку "Админ панель" только администратору? Используйте префикс <strong>if-</strong>.</p>
+        <p><strong>Пример:</strong><br>
+        Дайте группе или Frame'у имя <code>if-is_admin</code>. Весь этот блок будет появляться только если условие `is_admin` будет истинным.</p>
+      </div>
+    </div>
+    
+    <div id="status"></div>
 
-  <div id="font-warning" class="warning" style="display: none;">
-    <h4>Внимание! Обнаружены шрифты:</h4>
-    <ul id="font-list"></ul>
-    <p>Убедитесь, что вы скачали файлы этих шрифтов (<code>.ttf</code>/<code>.otf</code>) и подключили их в <code>style.css</code> через <code>@font-face</code>.</p>
+    <div id="results">
+      <div class="tabs">
+        <div class="tab active" data-tab="html">HTML</div>
+        <div class="tab" data-tab="css">CSS</div>
+        <div class="tab" data-tab="assets">Ассеты</div>
+      </div>
+      <div class="tab-content active" id="tab-html">
+        <textarea id="html-output" readonly></textarea>
+      </div>
+      <div class="tab-content" id="tab-css">
+        <textarea id="css-output" readonly></textarea>
+      </div>
+      <div class="tab-content" id="tab-assets">
+        <p><strong>Шрифты:</strong></p>
+        <div id="font-warning" style="display: none;">
+          <p>Найдены кастомные шрифты! В скачанном архиве они будут подключены в <code>style.css</code>. Вам нужно будет вручную поместить файлы этих шрифтов в папку <code>/fonts</code>.</p>
+          <ul class="assets-list" id="font-list"></ul>
+        </div>
+        <p><strong>Изображения:</strong></p>
+        <ul class="assets-list" id="image-list"></ul>
+      </div>
+      <button id="download-zip">Скачать ZIP-архив</button>
+    </div>
   </div>
 
 <script>
+  let generatedData = null;
+
   const generateBtn = document.getElementById('generate');
   const statusEl = document.getElementById('status');
-  const fontWarningEl = document.getElementById('font-warning');
-  const fontListEl = document.getElementById('font-list');
+  const resultsEl = document.getElementById('results');
+  const downloadBtn = document.getElementById('download-zip');
 
   generateBtn.onclick = () => {
     generateBtn.disabled = true;
-    statusEl.textContent = 'Обработка...';
-    fontWarningEl.style.display = 'none';
-    fontListEl.innerHTML = '';
-    parent.postMessage({ pluginMessage: { type: 'generate-html' } }, '*');
+    generateBtn.textContent = 'Обработка...';
+    statusEl.textContent = '';
+    resultsEl.style.display = 'none';
+    parent.postMessage({ pluginMessage: { type: 'generate-template' } }, '*');
   };
 
-  window.onmessage = async (event) => {
-    const msg = event.data.pluginMessage;
-    if (msg.type === 'generation-result') {
-      statusEl.textContent = 'Создание ZIP-архива...';
-      const { html, css, images, fonts, frameName } = msg.payload;
-
-      const zip = new JSZip();
-      zip.file('template.html', html);
-      zip.file('style.css', css);
-
-      if (images.length > 0) {
-        const imgFolder = zip.folder("images");
-        for (const image of images) {
-          const byteCharacters = atob(image.bytes);
-          const byteNumbers = new Array(byteCharacters.length);
-          for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-          }
-          const byteArray = new Uint8Array(byteNumbers);
-          imgFolder.file(image.name, byteArray);
-        }
+  downloadBtn.onclick = async () => {
+    if (!generatedData) return;
+    const { html, css, images, frameName } = generatedData;
+    
+    const zip = new JSZip();
+    zip.file('template.html', html);
+    zip.file('style.css', css);
+    
+    const imgFolder = zip.folder("images");
+    for (const image of images) {
+      const byteCharacters = atob(image.bytes);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
+      const byteArray = new Uint8Array(byteNumbers);
+      imgFolder.file(image.name, byteArray);
+    }
+    
+    zip.folder("fonts"); // Создаем пустую папку для шрифтов
 
+    const content = await zip.generateAsync({ type: "blob" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(content);
+    link.download = `${frameName}.zip`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  window.onmessage = (event) => {
+    const msg = event.data.pluginMessage;
+    generateBtn.disabled = false;
+    generateBtn.textContent = 'Сгенерировать шаблон';
+
+    if (msg.type === 'generation-result') {
+      generatedData = msg.payload;
+      const { html, css, images, fonts } = msg.payload;
+      
+      document.getElementById('html-output').value = html;
+      document.getElementById('css-output').value = css;
+
+      const imageList = document.getElementById('image-list');
+      imageList.innerHTML = images.length > 0 ? '' : '<li>Изображения не найдены</li>';
+      images.forEach(img => {
+        const li = document.createElement('li');
+        li.textContent = img.name;
+        imageList.appendChild(li);
+      });
+
+      const fontList = document.getElementById('font-list');
+      const fontWarning = document.getElementById('font-warning');
       if (fonts.length > 0) {
+        fontWarning.style.display = 'block';
+        fontList.innerHTML = '';
         fonts.forEach(font => {
           const li = document.createElement('li');
-          li.textContent = `${font.family} (Начертание: ${font.style})`;
-          fontListEl.appendChild(li);
+          li.textContent = `${font.family} - ${font.style}`;
+          fontList.appendChild(li);
         });
-        fontWarningEl.style.display = 'block';
+      } else {
+        fontWarning.style.display = 'none';
       }
 
-      const content = await zip.generateAsync({ type: "blob" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(content);
-      link.download = `${frameName}.zip`;
-      link.click();
-      URL.revokeObjectURL(link.href);
-
-      statusEl.textContent = 'Готово! Архив скачан.';
-      generateBtn.disabled = false;
-
+      resultsEl.style.display = 'block';
     } else if (msg.type === 'error') {
       statusEl.textContent = `Ошибка: ${msg.message}`;
-      generateBtn.disabled = false;
+    }
+  };
+
+  // Logic for tabs
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.onclick = (e) => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      e.target.classList.add('active');
+      document.getElementById(`tab-${e.target.dataset.tab}`).classList.add('active');
+    };
+  });
+  
+  // Logic for accordion
+  document.getElementById('accordion').onclick = (e) => {
+    const header = e.target.closest('.accordion-header');
+    if (header) {
+      header.classList.toggle('open');
+      header.nextElementSibling.style.display = header.classList.contains('open') ? 'block' : 'none';
     }
   };
 </script>

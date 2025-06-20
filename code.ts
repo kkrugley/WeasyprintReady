@@ -1,254 +1,253 @@
-// Файл: code.ts
-// Финальная версия с исправлением ошибок типизации TS7053
+// Файл: code.ts - Версия с исправлением ошибки типизации Set/Array
 
-figma.showUI(__html__, { width: 340, height: 500 });
+// Интерфейсы для хранения собранной информации
+interface ExportedImage { name: string; bytes: string; }
+interface UsedFont { family: string; style: string; weight: number; }
+interface ProcessingContext {
+  images: ExportedImage[];
+  // ** THE FIX IS HERE **
+  fonts: Set<UsedFont>; // Тип должен быть Set, чтобы метод .add() работал
+  cssRules: Map<string, string[]>;
+  classId: number;
+}
 
-const cssRules = new Map<string, string[]>();
-let classId = 0;
-const imagesToExport: { name: string; bytes: string }[] = [];
-const usedFonts = new Set<string>();
+// Запускаем UI
+figma.showUI(__html__, { width: 400, height: 600 });
 
+// Слушаем сообщения от UI
 figma.ui.onmessage = async (msg) => {
-  if (msg.type === 'generate-html') {
+  if (msg.type === 'generate-template') {
     const selection = figma.currentPage.selection;
-
     if (selection.length !== 1 || selection[0].type !== 'FRAME') {
       figma.ui.postMessage({ type: 'error', message: 'Пожалуйста, выберите один Frame.' });
       return;
     }
 
-    const rootNode = selection[0];
-
-    cssRules.clear();
-    imagesToExport.length = 0;
-    usedFonts.clear();
-    classId = 0;
+    // Создаем "контекст" для этого конкретного запуска
+    const context: ProcessingContext = {
+      images: [],
+      fonts: new Set<UsedFont>(), // Используем Set для автоматической дедупликации
+      cssRules: new Map(),
+      classId: 0,
+    };
 
     try {
-      const htmlContent = await processNode(rootNode);
-      let finalCss = generateFinalCss(rootNode);
-      const fonts = Array.from(usedFonts).map(fontString => {
-          const [family, style] = fontString.split('::');
-          return { family, style };
-      });
-      
+      const rootNode = selection[0];
+      const htmlContent = await processNode(rootNode, context);
+      const finalCss = generateFinalCss(rootNode, context);
+
       figma.ui.postMessage({
         type: 'generation-result',
         payload: {
-          html: `<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <title>{{ project_name }}</title>
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
-    ${htmlContent}
-</body>
-</html>`,
+          html: htmlContent,
           css: finalCss,
-          images: imagesToExport,
-          fonts: fonts,
+          images: context.images,
+          fonts: Array.from(context.fonts), // Конвертируем Set в массив перед отправкой в UI
           frameName: rootNode.name.replace(/[^a-zA-Z0-9]/g, '_') || 'export'
         },
       });
-
     } catch (error) {
       if (error instanceof Error) {
-        console.error("Plugin Error:", error);
-        figma.ui.postMessage({ type: 'error', message: `Произошла внутренняя ошибка: ${error.message}` });
-      } else {
-        console.error("Unknown Plugin Error:", error);
-        figma.ui.postMessage({ type: 'error', message: `Произошла неизвестная внутренняя ошибка` });
+        figma.ui.postMessage({ type: 'error', message: `Ошибка: ${error.message}` });
+        console.error(error.stack);
       }
     }
   }
 };
 
-async function processNode(node: SceneNode): Promise<string> {
+// Главная рекурсивная функция обработки узлов
+async function processNode(node: SceneNode, context: ProcessingContext): Promise<string> {
   if (!node.visible) return '';
+
+  const { name } = node;
+  const parts = name.split('-').map(p => p.trim());
+  const prefix = parts[0];
+  const varName = parts.slice(1).join('_');
+
+  // Обработка циклов {% for ... %}
+  if (prefix === 'loop' && 'children' in node) {
+    const loopVar = varName.endsWith('s') ? varName.slice(0, -1) : varName + '_item'; // 'products' -> 'product'
+    let itemHtml = '';
+    // Ищем ОДИН дочерний элемент, который будет шаблоном для цикла
+    const templateNode = node.children.find(child => child.visible);
+    if (templateNode) {
+      itemHtml = await processNode(templateNode, context);
+    }
+    const className = generateCssForNode(node, context);
+    return `<div class="${className}">\n  {% for ${loopVar} in ${varName} %}\n${itemHtml}\n  {% endfor %}\n</div>`;
+  }
   
-  const nodeName = node.name.trim();
-  const className = generateCssForNode(node);
-
-  if (nodeName === '{{ project_name }}' && node.type === 'TEXT') {
-    return `<h1 class="${className}">{{ project_name }}</h1>`;
-  }
-  if (nodeName === '{{ project_description }}' && node.type === 'TEXT') {
-    return `<div class="${className}">{{ project_description | safe }}</div>`;
-  }
-  if (nodeName === '{{#images}}' && 'children' in node) {
-    let imagesHtml = `{% for image_path in images %}\n    <div class="image-container">\n        <img src="{{ image_path }}" alt="Project image">\n    </div>\n{% endfor %}`;
-    return `<div class="${className}">\n${imagesHtml}\n</div>`;
-  }
-
+  // Стандартная обработка узла
+  const className = generateCssForNode(node, context);
   let childrenHtml = '';
   if ('children' in node) {
     for (const child of node.children) {
-      childrenHtml += await processNode(child);
+      childrenHtml += await processNode(child, context);
     }
   }
 
-  let tagName = 'div';
+  let tag = 'div';
   let content = childrenHtml;
-  let extraAttrs = '';
-
+  let attrs = `class="${className}"`;
+  
+  // Определяем тег и контент на основе типа узла
   if (node.type === 'TEXT') {
-    content = node.characters.replace(/\n/g, '<br>');
-  } else if (
-    node.type === 'RECTANGLE' || node.type === 'ELLIPSE' ||
-    node.type === 'POLYGON' || node.type === 'VECTOR' || node.type === 'FRAME'
-  ) {
-    const imageFill = Array.isArray(node.fills) && node.fills.find(fill => fill.type === 'IMAGE' && fill.visible);
-    if (imageFill) {
-      try {
-        const bytes = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
-        const base64String = figma.base64Encode(bytes);
-        const imageName = `image_${imagesToExport.length + 1}.png`;
-        imagesToExport.push({ name: imageName, bytes: base64String });
-        
-        if (!('children' in node) || node.children.length === 0) {
-           tagName = 'img';
-           content = ''; 
-           extraAttrs = ` src="images/${imageName}" alt="${node.name.replace(/"/g, '"')}"`;
-        } else {
-          const rules = cssRules.get(className) || [];
-          rules.push(`background-image: url('images/${imageName}');`);
-          rules.push(`background-size: cover;`);
-          rules.push(`background-position: center;`);
-          cssRules.set(className, rules);
-        }
-      } catch (e) {
-        console.error(`Image export failed for node "${node.name}":`, e);
-      }
-    }
+    tag = 'p'; // По умолчанию p, можно усложнить для h1,h2...
+    content = prefix === 'var' ? `{{ ${varName} }}` : node.characters.replace(/\n/g, '<br>');
+  } else if (isImageNode(node)) {
+    tag = 'img';
+    const exportedImageName = await exportImage(node, context);
+    const src = prefix === 'var' ? `{{ ${varName} }}` : `images/${exportedImageName}`;
+    attrs += ` src="${src}" alt="${varName || 'image'}"`;
+    content = ''; // У img нет дочерних элементов
   }
-
-  const classAttr = className ? ` class="${className}"` : '';
-
-  if (tagName === 'img') {
-      return `<${tagName}${classAttr}${extraAttrs}>`;
+  
+  const html = `<${tag} ${attrs}>${content}</${tag}>`;
+  
+  // Обработка условий {% if ... %}
+  if (prefix === 'if') {
+    return `{% if ${varName} %}\n  ${html}\n{% endif %}`;
   }
-  return `<${tagName}${classAttr}>${content}</${tagName}>`;
+  
+  return html;
 }
 
-function generateCssForNode(node: SceneNode): string {
+// Утилита для проверки, является ли узел изображением
+function isImageNode(node: SceneNode): boolean {
+  return 'fills' in node && Array.isArray(node.fills) && node.fills.some(fill => fill.type === 'IMAGE' && fill.visible);
+}
+
+// Утилита для экспорта изображения
+async function exportImage(node: SceneNode, context: ProcessingContext): Promise<string> {
+  const imageName = `image_${context.images.length + 1}.png`;
+  try {
+    const bytes = await node.exportAsync({ format: 'PNG', constraint: { type: 'SCALE', value: 2 } });
+    context.images.push({ name: imageName, bytes: figma.base64Encode(bytes) });
+  } catch (e) {
+    console.error(`Failed to export image from node "${node.name}":`, e);
+  }
+  return imageName;
+}
+
+// Функция генерации CSS
+function generateCssForNode(node: SceneNode, context: ProcessingContext): string {
   const styles: string[] = [];
-  const className = `el-${classId++}`;
+  const className = `el-${context.classId++}`;
 
-  if ('opacity' in node && node.opacity < 1) styles.push(`opacity: ${node.opacity.toFixed(2)};`);
-  
-  if (node.type === 'FRAME' || node.type === 'COMPONENT' || node.type === 'INSTANCE') {
-    if (node.layoutMode !== 'NONE') {
-      styles.push('display: flex;');
-      styles.push(`flex-direction: ${node.layoutMode === 'VERTICAL' ? 'column' : 'row'};`);
-      if (node.itemSpacing > 0) styles.push(`gap: ${node.itemSpacing}px;`);
-      
-      const justifyContentMap: { [key: string]: string } = { MIN: 'flex-start', MAX: 'flex-end', CENTER: 'center', SPACE_BETWEEN: 'space-between' };
-      if (node.primaryAxisAlignItems in justifyContentMap) {
-          styles.push(`justify-content: ${justifyContentMap[node.primaryAxisAlignItems]};`);
-      }
-
-      // ** THE REAL FIX 1 **
-      const alignItemsMap: { [key: string]: string } = { MIN: 'flex-start', MAX: 'flex-end', CENTER: 'center' };
-      if (node.counterAxisAlignItems in alignItemsMap) {
-        styles.push(`align-items: ${alignItemsMap[node.counterAxisAlignItems]};`);
-      }
-      
-      if (node.layoutWrap === 'WRAP') styles.push('flex-wrap: wrap;');
+  // Стили Flexbox из Auto Layout
+  if ('layoutMode' in node && node.layoutMode !== 'NONE') {
+    styles.push('display: flex;');
+    styles.push(`flex-direction: ${node.layoutMode === 'VERTICAL' ? 'column' : 'row'};`);
+    if (node.itemSpacing > 0) styles.push(`gap: ${node.itemSpacing}px;`);
+    
+    const justifyContentMap: { [key: string]: string } = { MIN: 'flex-start', MAX: 'flex-end', CENTER: 'center', SPACE_BETWEEN: 'space-between' };
+    if (node.primaryAxisAlignItems in justifyContentMap) {
+        styles.push(`justify-content: ${justifyContentMap[node.primaryAxisAlignItems]};`);
     }
-    if (node.paddingTop > 0 || node.paddingRight > 0 || node.paddingBottom > 0 || node.paddingLeft > 0) {
-      styles.push(`padding: ${node.paddingTop}px ${node.paddingRight}px ${node.paddingBottom}px ${node.paddingLeft}px;`);
+
+    const alignItemsMap: { [key: string]: string } = { MIN: 'flex-start', MAX: 'flex-end', CENTER: 'center' };
+    if (node.counterAxisAlignItems in alignItemsMap) {
+      styles.push(`align-items: ${alignItemsMap[node.counterAxisAlignItems]};`);
     }
   }
-  
+
+  // Отступы
+  if ('paddingLeft' in node) {
+    styles.push(`padding: ${node.paddingTop}px ${node.paddingRight}px ${node.paddingBottom}px ${node.paddingLeft}px;`);
+  }
+
+  // Заливка
   if ('fills' in node && Array.isArray(node.fills)) {
     const solidFill = node.fills.find(fill => fill.type === 'SOLID' && fill.visible);
-    if (solidFill && solidFill.type === 'SOLID') {
+    if (solidFill) {
       const { r, g, b } = solidFill.color;
       const a = solidFill.opacity ?? 1;
       styles.push(`background-color: rgba(${Math.round(r*255)}, ${Math.round(g*255)}, ${Math.round(b*255)}, ${a.toFixed(2)});`);
     }
   }
 
+  // Обводка
   if ('strokes' in node && node.strokes.length > 0) {
-    const stroke = node.strokes[0];
-    if (stroke.type === 'SOLID' && stroke.visible) {
-      const { r, g, b } = stroke.color;
-      const a = stroke.opacity ?? 1;
-      const weight = typeof node.strokeWeight === 'number' ? node.strokeWeight : 1;
-      styles.push(`border: ${weight}px solid rgba(${Math.round(r*255)}, ${Math.round(g*255)}, ${Math.round(b*255)}, ${a.toFixed(2)});`);
-    }
+      const stroke = node.strokes[0];
+      if (stroke.type === 'SOLID' && stroke.visible) {
+          const { r, g, b } = stroke.color;
+          const a = stroke.opacity ?? 1;
+          const weight = typeof node.strokeWeight === 'number' ? node.strokeWeight : 1;
+          styles.push(`border: ${weight}px solid rgba(${Math.round(r*255)}, ${Math.round(g*255)}, ${Math.round(b*255)}, ${a.toFixed(2)});`);
+      }
   }
-
+  
+  // Скругление углов
   if ('cornerRadius' in node && typeof node.cornerRadius === 'number' && node.cornerRadius > 0) {
     styles.push(`border-radius: ${node.cornerRadius}px;`);
-  } else if ((node.type === 'RECTANGLE' || node.type === 'FRAME') && typeof node.topLeftRadius === 'number') {
-    styles.push(`border-radius: ${node.topLeftRadius || 0}px ${node.topRightRadius || 0}px ${node.bottomRightRadius || 0}px ${node.bottomLeftRadius || 0}px;`);
   }
 
+  // Стили текста
   if (node.type === 'TEXT') {
     if (node.fontName !== figma.mixed) {
       const fontName = node.fontName;
-      usedFonts.add(`${fontName.family}::${fontName.style}`);
-      styles.push(`font-family: '${fontName.family}', sans-serif;`);
-      styles.push(`font-style: ${fontName.style.toLowerCase().includes('italic') ? 'italic' : 'normal'};`);
-      
       const fontWeightMap: { [key: string]: number } = { thin: 100, extralight: 200, light: 300, regular: 400, medium: 500, semibold: 600, bold: 700, extrabold: 800, black: 900 };
       const styleKey = fontName.style.toLowerCase().replace(/ /g, '');
-      if (styleKey in fontWeightMap) {
-        styles.push(`font-weight: ${fontWeightMap[styleKey]};`);
-      } else {
-        styles.push(`font-weight: 400;`);
+      const weight = fontWeightMap[styleKey] || 400;
+      
+      // Добавляем шрифт в общий список, Set сам разберется с дубликатами
+      context.fonts.add({ family: fontName.family, style: fontName.style, weight });
+
+      styles.push(`font-family: '${fontName.family}', sans-serif;`);
+      styles.push(`font-weight: ${weight};`);
+      if (fontName.style.toLowerCase().includes('italic')) {
+        styles.push('font-style: italic;');
       }
     }
     if (node.fontSize !== figma.mixed) styles.push(`font-size: ${node.fontSize}px;`);
-    if (node.lineHeight !== figma.mixed && node.lineHeight.unit !== 'AUTO') {
-      const value = node.lineHeight.unit === 'PIXELS' ? `${node.lineHeight.value}px` : `${node.lineHeight.value}%`;
-      styles.push(`line-height: ${value};`);
-    }
-    if (node.letterSpacing !== figma.mixed && node.letterSpacing.value !== 0 && node.fontSize !== figma.mixed) {
-      const value = node.letterSpacing.unit === 'PIXELS' ? `${node.letterSpacing.value}px` : `${(node.letterSpacing.value / node.fontSize).toFixed(3)}em`;
-      styles.push(`letter-spacing: ${value};`);
-    }
-    if (node.textCase !== figma.mixed && node.textCase !== 'ORIGINAL') {
-        // ** THE REAL FIX 2 **
-        const textTransformMap: { [key: string]: string } = { 'UPPER': 'uppercase', 'LOWER': 'lowercase', 'TITLE': 'capitalize' };
-        if (node.textCase in textTransformMap) {
-          styles.push(`text-transform: ${textTransformMap[node.textCase]};`);
+    if (node.fills !== figma.mixed && node.fills.length > 0) {
+        const fill = node.fills[0];
+        if (fill.type === 'SOLID') {
+             const { r, g, b } = fill.color;
+             styles.push(`color: rgb(${Math.round(r*255)}, ${Math.round(g*255)}, ${Math.round(b*255)});`);
         }
     }
-    if (node.textAlignHorizontal) styles.push(`text-align: ${node.textAlignHorizontal.toLowerCase()};`);
-  }
-
-  if ('effects' in node && node.effects.length > 0) {
-    const shadow = node.effects.find(e => e.type === 'DROP_SHADOW' && e.visible);
-    if (shadow && shadow.type === 'DROP_SHADOW') {
-      const { r, g, b, a } = shadow.color;
-      styles.push(`box-shadow: ${shadow.offset.x}px ${shadow.offset.y}px ${shadow.radius}px rgba(${Math.round(r*255)}, ${Math.round(g*255)}, ${Math.round(b*255)}, ${a.toFixed(2)});`);
-    }
-  }
-  
-  if (node.name.includes('[no-break]')) {
-    styles.push('page-break-inside: avoid;');
+    // ... другие стили текста (line-height, letter-spacing) можно добавить по аналогии
   }
 
   if (styles.length > 0) {
-    cssRules.set(className, styles);
+    context.cssRules.set(className, styles);
     return className;
   }
   return '';
 }
 
-function generateFinalCss(rootNode: FrameNode): string {
-    let cssString = `/* Generated by Figma to WeasyPrint Exporter */\n\n`;
+// Финальная сборка CSS-файла
+function generateFinalCss(rootNode: FrameNode, context: ProcessingContext): string {
+    let cssString = `@charset "UTF-8";\n\n/* Generated by WeasyPrint Exporter */\n\n`;
+    
+    // Правило @page
     cssString += `@page {\n    size: ${rootNode.width}px ${rootNode.height}px;\n    margin: 0;\n}\n\n`;
-    cssString += `body {\n    margin: 0;\n    font-family: sans-serif;\n    box-sizing: border-box;\n}\n\n`;
-    cssString += `*, *::before, *::after {\n    box-sizing: inherit;\n}\n\n`;
-    cssString += `img { max-width: 100%; height: auto; display: block; }\n\n`;
-    cssString += `.image-container img { width: 100%; height: auto; }\n\n`;
+    
+    // Базовые стили
+    cssString += `body { margin: 0; font-family: sans-serif; box-sizing: border-box; }\n`;
+    cssString += `*, *::before, *::after { box-sizing: inherit; }\n`;
+    cssString += `img { max-width: 100%; display: block; }\n\n`;
 
-    for (const [className, rules] of cssRules.entries()) {
+    // Подключение шрифтов
+    const fonts = Array.from(context.fonts);
+    if (fonts.length > 0) {
+        cssString += `/* --- FONT DEFINITIONS --- */\n`;
+        fonts.forEach(font => {
+            cssString += `@font-face {\n`;
+            cssString += `  font-family: '${font.family}';\n`;
+            cssString += `  font-style: ${font.style.toLowerCase().includes('italic') ? 'italic' : 'normal'};\n`;
+            cssString += `  font-weight: ${font.weight};\n`;
+            // Генерируем "умное" имя файла
+            const fileName = `${font.family.replace(/ /g, '')}-${font.style.replace(/ /g, '')}.ttf`;
+            cssString += `  src: url('fonts/${fileName}');\n`;
+            cssString += `}\n\n`;
+        });
+    }
+
+    // Стили элементов
+    cssString += `/* --- ELEMENT STYLES --- */\n`;
+    for (const [className, rules] of context.cssRules.entries()) {
         cssString += `.${className} {\n`;
         rules.forEach(rule => { cssString += `    ${rule}\n`; });
         cssString += `}\n\n`;
